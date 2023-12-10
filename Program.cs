@@ -15,6 +15,247 @@ c.Cache = r.BestCache (s);
 
 Task.WaitAll (c.Execute ());
 
+public abstract class Filter<T>
+{
+    public static readonly Filter<T> True = new TrueFilter<T> ();
+    public static readonly Filter<T> False = new FalseFilter<T> ();
+
+    public abstract bool Pass (T data);
+
+    public virtual Filter<T> And (Filter<T> Other)
+    {
+        return new AndFilter<T> (this, Other);
+    }
+
+    public virtual Filter<T> Or (Filter<T> Other)
+    {
+        return new OrFilter<T> (this, Other);
+    }
+
+    public virtual Filter<T> Not ()
+    {
+        return new NotFilter<T> (this);
+    }
+}
+
+public class StringFilter
+{
+    public static Filter<string> Parse (string Expression)
+    {
+        Filter<string> Result = Filter<string>.False;
+
+        foreach (string t in Expression.Split (';'))
+        {
+            Result = Result.Or (ParseTerm (t.Trim()));
+        }
+        return Result;
+    }
+
+    public static Filter<string> ParseTerm (string Term)
+    {
+        Filter<string> Result = Filter<string>.True;
+
+        foreach (string t in Term.Split (' '))
+        {
+            Result = Result.Or (ParseFactor (t.Trim()));
+        }
+        return Result;
+    }
+
+    public static Filter<string> ParseFactor(string Term)
+    {
+        if (Term.StartsWith ("^"))
+        {
+            return new StartsFilter (Term[1..]);
+        }
+        else if (Term.EndsWith ("$"))
+        {
+            return new EndsFilter (Term[..^1]);
+        }
+        else
+        {
+            return new ContainsFilter (Term);
+        }
+    }
+
+    public static Filter<string> ParseIncludeExclude (string Include, string Exclude)
+    {
+        if (String.IsNullOrEmpty (Include))
+        {
+            if (String.IsNullOrEmpty (Exclude))
+            {
+                return Filter<string>.True;
+            }
+            else
+            {
+                return Parse (Exclude).Not ();
+            }
+        }
+        else if (String.IsNullOrEmpty (Exclude))
+        {
+            return Parse (Include);
+        }
+        else
+        {
+            return Parse (Include).And (Parse(Exclude).Not ());
+        }
+    }
+}
+
+public class TrueFilter<T> : Filter<T>
+{
+    public override bool Pass(T data)
+    {
+        return true;
+    }
+}
+
+public class FalseFilter<T> : Filter<T>
+{
+    public override bool Pass(T data)
+    {
+        return false;
+    }
+
+    public override Filter<T> Or(Filter<T> Other)
+    {
+        return Other;
+    }
+
+    public override Filter<T> And(Filter<T> Other)
+    {
+        return this;
+    }
+}
+
+public class NotFilter<T> : Filter<T>
+{
+    private Filter<T> _Inner;
+
+    public NotFilter (Filter<T> Inner)
+    {
+        _Inner = Inner;
+    }
+
+    public override bool Pass(T data)
+    {
+        return !_Inner.Pass(data);
+    }
+
+    public override Filter<T> Not()
+    {
+        return _Inner;
+    }
+}
+
+public class OrFilter<T> : Filter<T>
+{
+    private Filter<T> _Inner1, _Inner2;
+
+    public OrFilter (Filter<T> Inner1, Filter<T> Inner2)
+    {
+        _Inner1 = Inner1;
+        _Inner2 = Inner2;
+    }
+
+    public override bool Pass(T data)
+    {
+        return _Inner1.Pass(data) || _Inner2.Pass(data);
+    }
+}
+
+public class AndFilter<T> : Filter<T>
+{
+    private Filter<T> _Inner1, _Inner2;
+
+    public AndFilter (Filter<T> Inner1, Filter<T> Inner2)
+    {
+        _Inner1 = Inner1;
+        _Inner2 = Inner2;
+    }
+
+    public override bool Pass(T data)
+    {
+        return _Inner1.Pass(data) && _Inner2.Pass(data);
+    }
+}
+
+public class EqualityFilter<T> : Filter<T>
+{
+    private T _Value;
+
+    public EqualityFilter (T Value)
+    {
+        _Value = Value;
+    }
+
+    public override bool Pass(T data)
+    {
+        return (data is not null) && data.Equals (_Value);
+    }
+}
+
+public class ContainsFilter : Filter<string>
+{
+    private string _Value;
+
+    public ContainsFilter (string Value)
+    {
+        _Value = Value;
+    }
+
+    public override bool Pass(string data)
+    {
+        return data.Contains(_Value);
+    }
+}
+
+public class StartsFilter : Filter<string>
+{
+    private string _Value;
+
+    public StartsFilter (string Value)
+    {
+        _Value = Value;
+    }
+
+    public override bool Pass(string data)
+    {
+        return data.StartsWith(_Value);
+    }
+}
+
+public class EndsFilter : Filter<string>
+{
+    private string _Value;
+
+    public EndsFilter (string Value)
+    {
+        _Value = Value;
+    }
+
+    public override bool Pass(string data)
+    {
+        return data.EndsWith(_Value);
+    }
+}
+
+public class FileToCopy
+{
+    public FileInfo Source { get; private init; }
+    public FileInfo Destination { get; private init; }
+
+    public FileToCopy (FileInfo Source, FileInfo Destination)
+    {
+        this.Source = Source;
+        this.Destination = Destination;
+    }
+
+    public bool SameSize => Source.Length == Destination.Length;
+    public bool SameTime => Source.LastWriteTime == Destination.LastWriteTime;
+    public bool Older => Source.LastWriteTime < Destination.LastWriteTime;
+
+}
 //   A repository is a collection of subdirectories, each representing a version
 //   of a given artifact.
 
@@ -30,8 +271,8 @@ public class Repository
     {
         _Configuration = (JsonObject)JsonObject.Parse (File.ReadAllText (ConfigurationFile));
 
-        _Destination = new DirectoryInfo (@"c:\SnCopy\Destination\");
-        _Source = new DirectoryInfo (@"c:\SnCopy\Source\");
+        _Destination = new DirectoryInfo (_Configuration["source"]);
+        _Source = new DirectoryInfo (_Configuration["destination"]);
     }
 
     private T? Latest<T> (IEnumerable<T> Items, Func<T,bool> Filter) where T : Version
