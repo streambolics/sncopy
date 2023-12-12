@@ -3,12 +3,52 @@ using System.Json;
 
 public class UserInterface
 {
-    public static void Main ()
+    private static void Try (ref bool Found, ref string FileName, string Attempt)
+    {
+        if (Found) return;
+        if (File.Exists (Attempt))
+        {
+            FileName = Attempt;
+            Found = true;
+        }
+    }
+
+    private static void TryPath (ref bool Found, ref string FileName, string ConfName, string PathName)
+    {
+        if (Found) return;
+        Try (ref Found, ref FileName, Path.Combine (PathName, ConfName));
+        Try (ref Found, ref FileName, Path.Combine (PathName, ConfName + ".json"));
+    }
+
+    private static void TrySpecialFolder (ref bool Found, ref string FileName, string ConfName, Environment.SpecialFolder FolderId)
+    {
+        if (Found) return;
+        TryPath (ref Found, ref FileName, ConfName, Path.Combine (Environment.GetFolderPath (FolderId), "SnCopy"));
+    }
+
+    public static string ResolveConf (string ConfName)
+    {
+        bool Found = false;
+        string FileName = "";
+        TryPath (ref Found, ref FileName, ConfName, "");
+        TrySpecialFolder (ref Found, ref FileName, ConfName, Environment.SpecialFolder.MyDocuments);
+        TrySpecialFolder (ref Found, ref FileName, ConfName, Environment.SpecialFolder.ApplicationData);
+        if (Found)
+        {
+            return FileName;
+        }
+        throw new Exception ($"Configuration {ConfName} not found");
+    }
+
+    public static void Main (string[] Args)
     {
         try
         {
-            Repository r = new Repository (@"c:\SnCopy\test.json");
+            string ConfName = Args.Length > 0 ? Args[0] : "default";
 
+            Repository r = new Repository (ResolveConf (ConfName));
+
+            Console.Clear ();
             SourceVersion? s = Select (r.Sources (), "Please select the source version");
             if (s is null)
             {
@@ -25,7 +65,7 @@ public class UserInterface
         }
     }
 
-    public static T? Select<T> (IEnumerable<T> Options, string Prompt, int Max = 5)
+    public static T? Select<T> (IEnumerable<T> Options, string Prompt, int Max = 9)
     {
         List<T> Values = new (Options);
         if (Max > Values.Count)
@@ -69,6 +109,32 @@ public class UserInterface
                 }
             }
             Console.WriteLine("I did not understand");
+        }
+    }
+
+    private static int LastConsoleWidth = -1;
+    public static void Home ()
+    {
+        int n = Console.WindowWidth;
+        if (n != LastConsoleWidth)
+        {
+            Console.Clear ();
+            LastConsoleWidth = n;
+        }
+        Console.SetCursorPosition (0, 0);
+    }
+
+    public static void WriteLine (string s)
+    {
+        int n = Console.WindowWidth - 1;
+
+        if (s.Length >= n)
+        {
+            Console.WriteLine (s[0..(n-1)]);
+        }
+        else
+        {
+            Console.WriteLine (s + new String (' ', n-s.Length));
         }
     }
 }
@@ -115,24 +181,24 @@ public class StringFilter
 
         foreach (string t in Term.Split (' '))
         {
-            Result = Result.Or (ParseFactor (t.Trim()));
+            Result = Result.And (ParseFactor (t.Trim()));
         }
         return Result;
     }
 
-    public static Filter<string> ParseFactor(string Term)
+    public static Filter<string> ParseFactor(string Factor)
     {
-        if (Term.StartsWith ("^"))
+        if (Factor.StartsWith ("^"))
         {
-            return new StartsFilter (Term[1..]);
+            return new StartsFilter (Factor[1..]);
         }
-        else if (Term.EndsWith ("$"))
+        else if (Factor.EndsWith ("$"))
         {
-            return new EndsFilter (Term[..^1]);
+            return new EndsFilter (Factor[..^1]);
         }
         else
         {
-            return new ContainsFilter (Term);
+            return new ContainsFilter (Factor);
         }
     }
 
@@ -166,6 +232,16 @@ public class TrueFilter<T> : Filter<T>
     {
         return true;
     }
+
+    public override Filter<T> And(Filter<T> Other)
+    {
+        return Other;
+    }
+
+    public override string ToString()
+    {
+        return "T";
+    }
 }
 
 public class FalseFilter<T> : Filter<T>
@@ -178,6 +254,11 @@ public class FalseFilter<T> : Filter<T>
     public override Filter<T> Or(Filter<T> Other)
     {
         return Other;
+    }
+
+    public override string ToString()
+    {
+        return "F";
     }
 
     public override Filter<T> And(Filter<T> Other)
@@ -204,6 +285,11 @@ public class NotFilter<T> : Filter<T>
     {
         return _Inner;
     }
+
+    public override string ToString()
+    {
+        return $"!{_Inner}";
+    }
 }
 
 public class OrFilter<T> : Filter<T>
@@ -219,6 +305,11 @@ public class OrFilter<T> : Filter<T>
     public override bool Pass(T data)
     {
         return _Inner1.Pass(data) || _Inner2.Pass(data);
+    }
+
+    public override string ToString()
+    {
+        return $"({_Inner1} || {_Inner2})";
     }
 }
 
@@ -236,6 +327,12 @@ public class AndFilter<T> : Filter<T>
     {
         return _Inner1.Pass(data) && _Inner2.Pass(data);
     }
+
+    public override string ToString()
+    {
+        return $"({_Inner1} && {_Inner2})";
+    }
+
 }
 
 public class EqualityFilter<T> : Filter<T>
@@ -266,6 +363,11 @@ public class ContainsFilter : Filter<string>
     {
         return data.Contains(_Value);
     }
+
+    public override string ToString()
+    {
+        return $"Contains ({_Value})";
+    }
 }
 
 public class StartsFilter : Filter<string>
@@ -281,6 +383,12 @@ public class StartsFilter : Filter<string>
     {
         return data.StartsWith(_Value);
     }
+
+    public override string ToString()
+    {
+        return $"StartsWith ({_Value})";
+    }
+
 }
 
 public class EndsFilter : Filter<string>
@@ -296,6 +404,12 @@ public class EndsFilter : Filter<string>
     {
         return data.EndsWith(_Value);
     }
+
+    public override string ToString()
+    {
+        return $"EndsWith ({_Value})";
+    }
+
 }
 
 public class FileComparison
@@ -324,6 +438,7 @@ public class Repository
     private DirectoryInfo _Source;
     private List<SourceVersion>? _Sources;
     private JsonObject _Configuration;
+    private Filter<string> _VersionFilter;
 
     public Repository (string ConfigurationFile)
     {
@@ -331,6 +446,12 @@ public class Repository
 
         _Source = new DirectoryInfo (_Configuration["source"]);
         _Destination = new DirectoryInfo (_Configuration["destination"]);
+
+
+        string Include = _Configuration["versions"]["include"] ?? "";
+        string Exclude = _Configuration["versions"]["exclude"] ?? "";
+
+        _VersionFilter = StringFilter.ParseIncludeExclude (Include.ToLower(), Exclude.ToLower());
     }
 
     private T? Latest<T> (IEnumerable<T> Items, Func<T,bool> Filter) where T : Version
@@ -353,7 +474,10 @@ public class Repository
             Cache = new ();
             foreach (DirectoryInfo v in Base.GetDirectories ())
             {
-                Cache.Add (Factory (v));
+                if (_VersionFilter.Pass (v.Name.ToLower()))
+                {
+                    Cache.Add (Factory (v));
+                }
             }
             Cache.Sort ((v1, v2) => v2.CreationTime.CompareTo (v1.CreationTime));
         }
@@ -471,6 +595,7 @@ public class CopySession
     public long CachedBytesCopied { get; private set; } = 0;
     public int LocalFilesReused { get; private set; } = 0;
     public long LocalBytesReused { get; private set; } = 0;
+    private string CachedFileName = "", RemoteFileName = "";
 
     private TaskQueue _SourceFiles = new ();
     private TaskQueue _LocalCopies = new ();
@@ -485,36 +610,60 @@ public class CopySession
         this.Destination = Repository.CreateDestination (Source);
     }
 
-    private void DisplayStatisticsLine (string Label, int Files, long Bytes)
+    private void DisplayStatisticsLine (string Label, int Files, long Bytes, bool ShowSpeed, string FileName = "")
     {
-        Console.WriteLine ($"{Label+":", -25} {Files, 8} {Bytes, 24:n0}                       ");
+        string Speed ="";
+        if (ShowSpeed)
+        {
+            double s = (DateTime.Now - Start).TotalSeconds + 1;
+            Speed = $"{Bytes/s, 12:n0} B/s";
+        }
+
+        UserInterface.WriteLine ($"{Label+":", -25} {Files, 8} {Bytes, 24:n0} {Speed, 18} {FileName,-25}     ");
     }
 
     public void DisplayStatistics ()
     {
-        Console.SetCursorPosition (0, 0);
+        UserInterface.Home ();
         try
         {
-            Console.WriteLine ("                          -Files-- -----------------Bytes--");
-            DisplayStatisticsLine ("Remote Files Found", RemoteFilesFound, RemoteBytesFound);
-            DisplayStatisticsLine ("Remote Files Copied", RemoteFilesCopied,RemoteBytesCopied);
-            DisplayStatisticsLine ("Cached Files Copied", CachedFilesCopied, CachedBytesCopied);
-            DisplayStatisticsLine ("Local Files Reused", LocalFilesReused, LocalBytesReused);
-            Console.WriteLine ("                          -------- ------------------------");
-            DisplayStatisticsLine ("Total", RemoteFilesCopied+CachedFilesCopied+LocalFilesReused, RemoteBytesCopied+CachedBytesCopied+LocalBytesReused);
-            DisplayStatisticsLine ("Left", RemoteFilesFound-RemoteFilesCopied-CachedFilesCopied-LocalFilesReused, RemoteBytesFound-RemoteBytesCopied-CachedBytesCopied-LocalBytesReused);
+            UserInterface.WriteLine ("                          -Files-- -----------------Bytes--");
+            DisplayStatisticsLine ("Remote Files Found", RemoteFilesFound, RemoteBytesFound, false);
+            DisplayStatisticsLine ("Remote Files Copied", RemoteFilesCopied,RemoteBytesCopied, true, RemoteFileName);
+            DisplayStatisticsLine ("Cached Files Copied", CachedFilesCopied, CachedBytesCopied, true, CachedFileName);
+            DisplayStatisticsLine ("Local Files Reused", LocalFilesReused, LocalBytesReused, false);
+            UserInterface.WriteLine ("                          -------- ------------------------");
 
-            double Percents = (RemoteBytesCopied+CachedBytesCopied + 1.0) * 100.0 / (RemoteBytesFound - LocalBytesReused + 1.0);
+            int TotalFilesProcessed = RemoteFilesCopied + CachedFilesCopied + LocalFilesReused;
+            long TotalBytesProcessed = RemoteBytesCopied + CachedBytesCopied + LocalBytesReused;
+            DisplayStatisticsLine ("Total", TotalFilesProcessed, TotalBytesProcessed, true);
+            DisplayStatisticsLine ("Left", RemoteFilesFound - TotalFilesProcessed, RemoteBytesFound - TotalBytesProcessed, false);
+
+            double BytePercents = (RemoteBytesCopied + CachedBytesCopied + 1.0) * 100.0 / (RemoteBytesFound - LocalBytesReused + 1.0);
+            double FilePercents = (RemoteFilesCopied + CachedFilesCopied + 1.0) * 100.0 / (RemoteFilesFound - LocalFilesReused + 1.0);
+
+            //  Estimate percent done as an average of both, with lowest having more weight
+
+            double Percents;
+            if (BytePercents > FilePercents)
+            {
+                Percents = FilePercents * 0.8 + BytePercents * 0.2;
+            }
+            else
+            {
+                Percents = BytePercents * 0.95 + FilePercents * 0.05;
+            }
+
             TimeSpan Elapsed = DateTime.Now - Start;
             TimeSpan Expected = new ((long)(Elapsed.Ticks * 100 / Percents));
             TimeSpan Left = Expected - Elapsed;
             DateTime Eta = Start + Expected;
 
-            Console.WriteLine ();
-            Console.WriteLine ($"Performed:    {(int)Percents} % {Estimation}               ");
-            Console.WriteLine ($"Time elapsed: {Elapsed} {Estimation}               ");
-            Console.WriteLine ($"Time left:    {Left} {Estimation}               ");
-            Console.WriteLine ($"ETA:          {Eta} {Estimation}              ");
+            UserInterface.WriteLine ("");
+            UserInterface.WriteLine ($"Performed:    {(int)Percents}% ({(int)BytePercents}% Bytes, {(int)FilePercents}% Files) {Estimation}               ");
+            UserInterface.WriteLine ($"Time elapsed: {Elapsed} {Estimation}               ");
+            UserInterface.WriteLine ($"Time left:    {Left} {Estimation}               ");
+            UserInterface.WriteLine ($"ETA:          {Eta} {Estimation}              ");
         }
         catch
         {
@@ -544,6 +693,20 @@ public class CopySession
         return Task.Run (() =>
         {
             DirectoryInfo TargetDirectory = new (Path.Combine (Destination.FullName, RelativeDirectory));
+            if (IsCached)
+            {
+                lock (this)
+                {
+                    CachedFileName = File.Name;
+                }
+            }
+            else
+            {
+                lock (this)
+                {
+                    RemoteFileName = File.Name;
+                }
+            }
             TargetDirectory.Create ();
             File.CopyTo (Path.Combine (Destination.FullName, RelativeFile), true);
             if (IsCached)
@@ -552,6 +715,7 @@ public class CopySession
                 {
                     CachedFilesCopied++;
                     CachedBytesCopied += File.Length;
+                    CachedFileName = "";
                 }
             }
             else
@@ -560,6 +724,7 @@ public class CopySession
                 {
                     RemoteFilesCopied++;
                     RemoteBytesCopied += File.Length;
+                    RemoteFileName = "";
                 }
             }
         });
